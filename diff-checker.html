@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文本对比工具 - Diff Checker</title>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #f5f5f5;
+  color: #333;
+  min-height: 100vh;
+}
+
+.header {
+  text-align: center;
+  padding: 24px 16px 8px;
+}
+.header h1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+.header p {
+  margin-top: 4px;
+  font-size: 14px;
+  color: #888;
+}
+
+.container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 12px 16px 40px;
+}
+
+/* 输入区域 */
+.input-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.input-panel { display: flex; flex-direction: column; }
+.input-panel label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.input-panel label .badge {
+  font-size: 11px;
+  font-weight: 400;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: #fff;
+}
+.badge.original { background: #e03131; }
+.badge.modified { background: #2b8a3e; }
+
+.input-panel textarea {
+  flex: 1;
+  min-height: 260px;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-family: "SF Mono", "Cascadia Code", "Consolas", "PingFang SC", monospace;
+  font-size: 14px;
+  line-height: 1.7;
+  resize: vertical;
+  transition: border-color .2s;
+  background: #fff;
+}
+.input-panel textarea:focus {
+  outline: none;
+  border-color: #4dabf7;
+}
+
+/* 按钮行 */
+.btn-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .2s, transform .1s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn:active { transform: scale(0.96); }
+.btn-primary {
+  background: #4dabf7;
+  color: #fff;
+  font-size: 15px;
+  padding: 12px 28px;
+}
+.btn-primary:hover { background: #339af0; }
+.btn-secondary {
+  background: #fff;
+  color: #555;
+  border: 2px solid #e0e0e0;
+}
+.btn-secondary:hover { background: #f5f5f5; }
+.btn-danger {
+  background: #fff;
+  color: #e03131;
+  border: 2px solid #ffc9c9;
+}
+.btn-danger:hover { background: #fff5f5; }
+
+/* 统计条 */
+.stats-bar {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: #fff;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  align-items: center;
+  border: 1px solid #e8e8e8;
+  min-height: 42px;
+}
+.stats-bar.hidden { display: none; }
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+.stat-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.stat-dot.added { background: #b2f2bb; border: 1px solid #2b8a3e; }
+.stat-dot.removed { background: #ffc9c9; border: 1px solid #e03131; }
+.stat-dot.unchanged { background: #e9ecef; border: 1px solid #adb5bd; }
+
+/* 结果区域 */
+.result-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.result-panel {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.result-panel-header {
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #888;
+  border-bottom: 1px solid #eee;
+  background: #fafafa;
+}
+.result-content {
+  max-height: 520px;
+  overflow-y: auto;
+  font-family: "SF Mono", "Cascadia Code", "Consolas", "PingFang SC", monospace;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.result-content::-webkit-scrollbar { width: 6px; }
+.result-content::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+
+.diff-line {
+  display: flex;
+  min-height: 24px;
+  border-bottom: 1px solid #f5f5f5;
+}
+.diff-line-num {
+  flex-shrink: 0;
+  width: 44px;
+  text-align: right;
+  padding: 2px 8px 2px 4px;
+  color: #adb5bd;
+  font-size: 11px;
+  user-select: none;
+  background: #fafafa;
+  border-right: 1px solid #eee;
+}
+.diff-line-text {
+  flex: 1;
+  padding: 2px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-line.added .diff-line-text { background: #d3f9d8; }
+.diff-line.added .diff-line-num { background: #b2f2bb; color: #2b8a3e; }
+.diff-line.removed .diff-line-text { background: #ffe3e3; }
+.diff-line.removed .diff-line-num { background: #ffc9c9; color: #e03131; }
+.diff-line.unchanged .diff-line-text { background: #fff; }
+.diff-line.unchanged .diff-line-num { background: #fafafa; }
+.diff-line.placeholder .diff-line-text { background: #f8f8f8; }
+.diff-line.placeholder .diff-line-num { background: #f5f5f5; color: #ccc; }
+
+/* 模式切换 */
+.mode-toggle {
+  display: inline-flex;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid #e0e0e0;
+}
+.mode-btn {
+  padding: 8px 16px;
+  border: none;
+  background: #fff;
+  color: #888;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .2s, color .2s;
+}
+.mode-btn + .mode-btn { border-left: 2px solid #e0e0e0; }
+.mode-btn.active { background: #4dabf7; color: #fff; }
+
+/* 字符级高亮 */
+.char-added { background: #b2f2bb; border-radius: 2px; }
+.char-removed { background: #ffc9c9; border-radius: 2px; text-decoration: line-through; }
+.char-equal { }
+
+/* 上传按钮 */
+.upload-btn {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border: 1px solid #d0d0d0;
+  border-radius: 5px;
+  background: #fff;
+  color: #888;
+  cursor: pointer;
+  transition: background .15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.upload-btn:hover { background: #f0f0f0; color: #555; }
+.file-name {
+  font-size: 11px;
+  color: #4dabf7;
+  font-weight: 400;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
+
+/* 字符级高亮暗色 */
+@media (prefers-color-scheme: dark) {
+  .mode-toggle { border-color: #444; }
+  .mode-btn { background: #1a1a2e; color: #999; }
+  .mode-btn + .mode-btn { border-color: #444; }
+  .mode-btn.active { background: #4dabf7; color: #fff; }
+  .char-added { background: #1b4a1b; }
+  .char-removed { background: #4a1b1b; }
+  .upload-btn { background: #1a1a2e; border-color: #444; color: #999; }
+  .upload-btn:hover { background: #222; color: #ccc; }
+  textarea.drag-over { background: #1a2a3e; }
+}
+
+/* 空状态 */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #bbb;
+  font-size: 14px;
+}
+.empty-state .icon { font-size: 40px; margin-bottom: 10px; display: block; }
+
+/* 提示消息 */
+.toast {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #333;
+  color: #fff;
+  padding: 10px 24px;
+  border-radius: 20px;
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s;
+  z-index: 999;
+}
+.toast.show { opacity: 1; }
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .input-panels {
+    grid-template-columns: 1fr;
+  }
+  .input-panel textarea {
+    min-height: 180px;
+  }
+  .result-panels {
+    grid-template-columns: 1fr;
+  }
+  .btn-row { justify-content: center; }
+}
+
+@media (prefers-color-scheme: dark) {
+  body { background: #1a1a2e; color: #ccc; }
+  .header h1 { color: #e0e0e0; }
+  .header p { color: #999; }
+  .input-panel label { color: #bbb; }
+  .input-panel textarea {
+    background: #16213e;
+    border-color: #333;
+    color: #ddd;
+  }
+  .input-panel textarea:focus { border-color: #4dabf7; }
+  .btn-secondary { background: #1a1a2e; color: #ccc; border-color: #444; }
+  .btn-secondary:hover { background: #222; }
+  .btn-danger { background: #1a1a2e; border-color: #5c1a1a; }
+  .btn-danger:hover { background: #2b1a1a; }
+
+  .result-panel, .stats-bar { background: #16213e; border-color: #333; }
+  .result-panel-header { background: #1a1a2e; border-color: #333; color: #999; }
+  .result-content::-webkit-scrollbar-thumb { background: #555; }
+
+  .diff-line-num { background: #1a1a2e; color: #777; border-color: #333; }
+  .diff-line { border-color: #2a2a2a; }
+  .diff-line.added .diff-line-text { background: #1b3a1b; }
+  .diff-line.added .diff-line-num { background: #1b4a1b; color: #69db7c; }
+  .diff-line.removed .diff-line-text { background: #3a1b1b; }
+  .diff-line.removed .diff-line-num { background: #4a1b1b; color: #ff8787; }
+  .diff-line.unchanged .diff-line-text { background: #16213e; }
+  .diff-line.unchanged .diff-line-num { background: #1a1a2e; }
+  .diff-line.placeholder .diff-line-text { background: #1a1a2e; }
+  .diff-line.placeholder .diff-line-num { background: #1a1a2e; color: #555; }
+
+  .stat-dot.unchanged { background: #444; }
+  .toast { background: #e0e0e0; color: #1a1a1a; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>文本对比工具</h1>
+  <p>粘贴文本、上传文件或拖拽文件，秒看差异</p>
+</div>
+
+<div class="container">
+
+  <!-- 输入区 -->
+  <div class="input-panels">
+    <div class="input-panel">
+      <label>
+        <span class="badge original">原始</span> 原始文本
+        <button class="upload-btn" id="btnUploadLeft">📂 上传文件</button>
+        <span class="file-name" id="fileNameLeft"></span>
+      </label>
+      <input type="file" id="fileInputLeft" accept=".txt,.md,.json,.xml,.html,.htm,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.rs,.go,.rb,.php,.sql,.csv,.log,.yaml,.yml,.toml,.ini,.cfg,.sh,.bat,.ps1,.tex,.rst,.text,.docx,.xlsx,.xls" hidden>
+      <textarea id="original" placeholder="在此粘贴原始文本...或拖入文件"></textarea>
+    </div>
+    <div class="input-panel">
+      <label>
+        <span class="badge modified">修改</span> 修改后文本
+        <button class="upload-btn" id="btnUploadRight">📂 上传文件</button>
+        <span class="file-name" id="fileNameRight"></span>
+      </label>
+      <input type="file" id="fileInputRight" accept=".txt,.md,.json,.xml,.html,.htm,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.rs,.go,.rb,.php,.sql,.csv,.log,.yaml,.yml,.toml,.ini,.cfg,.sh,.bat,.ps1,.tex,.rst,.text,.docx,.xlsx,.xls" hidden>
+      <textarea id="modified" placeholder="在此粘贴修改后的文本...或拖入文件"></textarea>
+    </div>
+  </div>
+
+  <!-- 按钮 -->
+  <div class="btn-row">
+    <button class="btn btn-primary" id="btnDiff">开始对比</button>
+    <div class="mode-toggle" id="modeToggle">
+      <button class="mode-btn active" data-mode="line">按行</button>
+      <button class="mode-btn" data-mode="char">按字</button>
+    </div>
+    <button class="btn btn-secondary" id="btnSwap">交换左右</button>
+    <button class="btn btn-danger" id="btnClear">清空</button>
+  </div>
+
+  <!-- 统计 -->
+  <div class="stats-bar hidden" id="statsBar"></div>
+
+  <!-- 结果区 -->
+  <div class="result-panels" id="resultPanels">
+    <div class="result-panel">
+      <div class="result-panel-header">原始文本差异</div>
+      <div class="result-content" id="resultLeft">
+        <div class="empty-state">
+          <span class="icon">↔</span>
+          点击「开始对比」查看差异
+        </div>
+      </div>
+    </div>
+    <div class="result-panel">
+      <div class="result-panel-header">修改后文本差异</div>
+      <div class="result-content" id="resultRight">
+        <div class="empty-state">
+          <span class="icon">↔</span>
+          点击「开始对比」查看差异
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="btn-row" style="margin-top:12px;">
+    <button class="btn btn-secondary" id="btnCopy" style="display:none;">复制对比结果</button>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function() {
+
+  /* ====== 工具函数 ====== */
+  function esc(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /* ====== LCS 算法（逐行） ====== */
+  function lineLCS(oldLines, newLines) {
+    const m = oldLines.length;
+    const n = newLines.length;
+    const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        if (oldLines[i - 1] === newLines[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
+    }
+    const result = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+        result.push({ type: 'unchanged', oldLine: oldLines[i - 1], newLine: newLines[j - 1] });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        result.push({ type: 'added', oldLine: null, newLine: newLines[j - 1] });
+        j--;
+      } else {
+        result.push({ type: 'removed', oldLine: oldLines[i - 1], newLine: null });
+        i--;
+      }
+    }
+    return result.reverse();
+  }
+
+  /* ====== LCS 算法（逐字符），返回 {type, char}[] ====== */
+  function charLCS(s1, s2) {
+    const chars1 = [...s1];
+    const chars2 = [...s2];
+
+    // 裁剪公共前缀/后缀以减少 DP 表
+    let pre = 0;
+    while (pre < chars1.length && pre < chars2.length && chars1[pre] === chars2[pre]) pre++;
+    let suf = 0;
+    const minLen = Math.min(chars1.length - pre, chars2.length - pre);
+    while (suf < minLen && chars1[chars1.length - 1 - suf] === chars2[chars2.length - 1 - suf]) suf++;
+
+    const core1 = chars1.slice(pre, chars1.length - suf);
+    const core2 = chars2.slice(pre, chars2.length - suf);
+    const m = core1.length;
+    const n = core2.length;
+
+    // 限制大小，防止超大文本卡死
+    const MAX_CORE = 6000;
+    if (m > MAX_CORE || n > MAX_CORE) {
+      return null; // 降级为行内逐字
+    }
+    if (m === 0 && n === 0) {
+      // 全部相同
+      return chars1.map(c => ({ type: 'equal', char: c }));
+    }
+
+    const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+    // 检查溢出
+    let overflow = false;
+    for (let i = 1; i <= m && !overflow; i++) {
+      for (let j = 1; j <= n && !overflow; j++) {
+        if (core1[i - 1] === core2[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+          if (dp[i][j] === 65535 && i < m && j < n) overflow = true;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
+    }
+    if (overflow) return null;
+
+    // 回溯
+    const coreResult = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && core1[i - 1] === core2[j - 1]) {
+        coreResult.push({ type: 'equal', char: core1[i - 1] });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        coreResult.push({ type: 'insert', char: core2[j - 1] });
+        j--;
+      } else {
+        coreResult.push({ type: 'delete', char: core1[i - 1] });
+        i--;
+      }
+    }
+    coreResult.reverse();
+
+    // 拼接前缀、核心、后缀
+    const prefixOps = chars1.slice(0, pre).map(c => ({ type: 'equal', char: c }));
+    const suffixOps = chars1.slice(chars1.length - suf).map(c => ({ type: 'equal', char: c }));
+    return [...prefixOps, ...coreResult, ...suffixOps];
+  }
+
+  /* ====== 字符级 diff → 对齐的行对 ====== */
+  // 返回 [{left: {segments}, right: {segments}}, ...]，segment 含 type 和 text
+  function charOpsToLinePairs(charOps) {
+    const pairs = [];
+    let curLeft = [];
+    let curRight = [];
+
+    function emit() {
+      // 合并同类型相邻段
+      function merge(segs) {
+        const out = [];
+        for (const s of segs) {
+          if (out.length > 0 && out[out.length - 1].type === s.type) {
+            out[out.length - 1].text += s.text;
+          } else {
+            out.push({ type: s.type, text: s.text });
+          }
+        }
+        return out;
+      }
+      pairs.push({ left: merge(curLeft), right: merge(curRight) });
+      curLeft = [];
+      curRight = [];
+    }
+
+    for (const op of charOps) {
+      if (op.type === 'equal') {
+        if (op.char === '\n') {
+          emit();
+        } else {
+          curLeft.push({ type: 'equal', text: op.char });
+          curRight.push({ type: 'equal', text: op.char });
+        }
+      } else if (op.type === 'delete') {
+        if (op.char === '\n') {
+          emit();
+        } else {
+          curLeft.push({ type: 'deleted', text: op.char });
+        }
+      } else { // insert
+        if (op.char === '\n') {
+          emit();
+        } else {
+          curRight.push({ type: 'added', text: op.char });
+        }
+      }
+    }
+    if (curLeft.length > 0 || curRight.length > 0) emit();
+
+    return pairs;
+  }
+
+  /* ====== 构建字符级高亮的行 HTML ====== */
+  function buildCharLineHTML(segments, side, lineNum) {
+    // side: 'left' 显示 deleted, 'right' 显示 added
+    if (!segments || segments.length === 0) {
+      return diffLineHTML('placeholder', '', '');
+    }
+
+    // 判断整行状态
+    const hasHighlight = segments.some(s => s.type === 'deleted' || s.type === 'added');
+    let rowClass = 'unchanged';
+    if (hasHighlight && side === 'left') {
+      const allDel = segments.every(s => s.type === 'deleted');
+      rowClass = allDel ? 'removed' : 'unchanged';
+    } else if (hasHighlight && side === 'right') {
+      const allAdd = segments.every(s => s.type === 'added');
+      rowClass = allAdd ? 'added' : 'unchanged';
+    }
+
+    let html = '';
+    for (const seg of segments) {
+      const text = esc(seg.text);
+      if (seg.type === 'deleted' && side === 'left') {
+        html += '<span class="char-removed">' + text + '</span>';
+      } else if (seg.type === 'added' && side === 'right') {
+        html += '<span class="char-added">' + text + '</span>';
+      } else if (seg.type === 'equal') {
+        html += '<span class="char-equal">' + text + '</span>';
+      } else {
+        // 对面侧的内容，本侧不显示（但保留空白占位符用于对齐）
+        // deleted 字符在 right 侧不渲染，added 字符在 left 侧不渲染
+      }
+    }
+
+    if (!html) {
+      return diffLineHTML('placeholder', '', '');
+    }
+
+    const numDisplay = lineNum !== '' ? lineNum : '';
+    return '<div class="diff-line ' + rowClass + '"><span class="diff-line-num">' + numDisplay + '</span><span class="diff-line-text">' + html + '</span></div>';
+  }
+
+  /* ====== 按行模式：渲染 ====== */
+  function renderLineDiff(lineDiffResult) {
+    const leftDiv = document.getElementById('resultLeft');
+    const rightDiv = document.getElementById('resultRight');
+
+    let leftHTML = '';
+    let rightHTML = '';
+    let leftNum = 1;
+    let rightNum = 1;
+    let addedCount = 0;
+    let removedCount = 0;
+    let unchangedCount = 0;
+
+    for (const item of lineDiffResult) {
+      switch (item.type) {
+        case 'unchanged':
+          leftHTML += diffLineHTML('unchanged', leftNum++, esc(item.oldLine));
+          rightHTML += diffLineHTML('unchanged', rightNum++, esc(item.newLine));
+          unchangedCount++;
+          break;
+        case 'removed':
+          leftHTML += diffLineHTML('removed', leftNum++, esc(item.oldLine));
+          rightHTML += diffLineHTML('placeholder', '', '');
+          removedCount++;
+          break;
+        case 'added':
+          leftHTML += diffLineHTML('placeholder', '', '');
+          rightHTML += diffLineHTML('added', rightNum++, esc(item.newLine));
+          addedCount++;
+          break;
+      }
+    }
+
+    leftDiv.innerHTML = leftHTML || '<div class="empty-state">内容完全相同</div>';
+    rightDiv.innerHTML = rightHTML || '<div class="empty-state">内容完全相同</div>';
+
+    return { addedCount, removedCount, unchangedCount };
+  }
+
+  /* ====== 按字模式：混合算法 ====== */
+  // 正文过短（<=2 行）或全文 <=6000 字符时，做全文逐字 LCS
+  // 否则，做逐行 LCS，再对每个「变化块」做块内逐字 LCS
+  function computeCharDiff(oldText, newText) {
+    const oldLines = oldText.split('\n');
+    const newLines = newText.split('\n');
+
+    // 全文逐字 LCS
+    const fullCharOps = charLCS(oldText, newText);
+    if (fullCharOps) {
+      return charOpsToLinePairs(fullCharOps);
+    }
+
+    // 降级：逐行 LCS → 变化块内逐字
+    const lineOps = lineLCS(oldLines, newLines);
+
+    // 收集变化块
+    const blocks = [];
+    let cur = null;
+    for (const op of lineOps) {
+      if (op.type === 'unchanged') {
+        if (cur && cur.type === 'changed') { blocks.push(cur); cur = null; }
+        blocks.push({ type: 'unchanged', oldLine: op.oldLine, newLine: op.newLine });
+      } else {
+        if (!cur || cur.type !== 'changed') {
+          if (cur) blocks.push(cur);
+          cur = { type: 'changed', oldLines: [], newLines: [] };
+        }
+        if (op.type === 'removed') cur.oldLines.push(op.oldLine);
+        else cur.newLines.push(op.newLine);
+      }
+    }
+    if (cur) blocks.push(cur);
+
+    // 构建行对
+    const pairs = [];
+    let leftLineIdx = 0;
+    let rightLineIdx = 0;
+
+    for (const block of blocks) {
+      if (block.type === 'unchanged') {
+        pairs.push({
+          left: [{ type: 'equal', text: block.oldLine }],
+          right: [{ type: 'equal', text: block.newLine }]
+        });
+        leftLineIdx++; rightLineIdx++;
+      } else {
+        // 变化块：拼接所有行，做逐字 LCS
+        const oldBlock = block.oldLines.join('\n');
+        const newBlock = block.newLines.join('\n');
+        const blockCharOps = charLCS(oldBlock, newBlock);
+
+        if (blockCharOps) {
+          const blockPairs = charOpsToLinePairs(blockCharOps);
+          for (const p of blockPairs) pairs.push(p);
+        } else {
+          // 块内逐字也太大，退回整行高亮
+          for (const ol of block.oldLines) {
+            pairs.push({
+              left: [{ type: 'deleted', text: ol }],
+              right: []
+            });
+          }
+          for (const nl of block.newLines) {
+            pairs.push({
+              left: [],
+              right: [{ type: 'added', text: nl }]
+            });
+          }
+        }
+      }
+    }
+
+    // 重新对齐：确保左右行数一致
+    return realignPairs(pairs);
+  }
+
+  function realignPairs(pairs) {
+    // 保证每个 pair 都有 left 和 right，缺失的补占位
+    const result = [];
+    for (const p of pairs) {
+      const lp = p.left && p.left.length > 0 ? p.left : [];
+      const rp = p.right && p.right.length > 0 ? p.right : [];
+      result.push({ left: lp, right: rp });
+    }
+    return result;
+  }
+
+  /* ====== 按字模式：渲染 ====== */
+  function renderCharDiff(pairs) {
+    const leftDiv = document.getElementById('resultLeft');
+    const rightDiv = document.getElementById('resultRight');
+
+    let leftHTML = '';
+    let rightHTML = '';
+    let leftNum = 0;
+    let rightNum = 0;
+    let addedCount = 0;
+    let removedCount = 0;
+    let unchangedCount = 0;
+
+    for (const pair of pairs) {
+      const hasLeft = pair.left.some(s => s.type === 'equal' || s.type === 'deleted');
+      const hasRight = pair.right.some(s => s.type === 'equal' || s.type === 'added');
+
+      const leftOnlyDel = pair.left.length > 0 && pair.left.every(s => s.type === 'deleted');
+      const rightOnlyAdd = pair.right.length > 0 && pair.right.every(s => s.type === 'added');
+      const bothEq = pair.left.length > 0 && pair.right.length > 0 &&
+        pair.left.every(s => s.type === 'equal') &&
+        pair.right.every(s => s.type === 'equal');
+
+      if (hasLeft) leftNum++;
+      if (hasRight) rightNum++;
+
+      // 统计
+      if (leftOnlyDel && !hasRight) removedCount++;
+      else if (rightOnlyAdd && !hasLeft) addedCount++;
+      else if (bothEq) unchangedCount++;
+      else {
+        // 混合行：按字符统计
+        const totalChars = pair.left.reduce((s, seg) => s + seg.text.length, 0) +
+          pair.right.reduce((s, seg) => s + seg.text.length, 0);
+        if (totalChars === 0) unchangedCount++;
+        else if (leftOnlyDel) removedCount++;
+        else if (rightOnlyAdd) addedCount++;
+        else unchangedCount++;
+      }
+
+      leftHTML += buildCharLineHTML(pair.left, 'left', hasLeft ? leftNum : '');
+      rightHTML += buildCharLineHTML(pair.right, 'right', hasRight ? rightNum : '');
+    }
+
+    leftDiv.innerHTML = leftHTML || '<div class="empty-state">内容完全相同</div>';
+    rightDiv.innerHTML = rightHTML || '<div class="empty-state">内容完全相同</div>';
+
+    return { addedCount, removedCount, unchangedCount };
+  }
+
+  function diffLineHTML(cls, lineNum, text) {
+    const numDisplay = lineNum !== '' ? lineNum : '';
+    return '<div class="diff-line ' + cls + '"><span class="diff-line-num">' + numDisplay + '</span><span class="diff-line-text">' + text + '</span></div>';
+  }
+
+  /* ====== 统计条 ====== */
+  function updateStats(added, removed, unchanged) {
+    const bar = document.getElementById('statsBar');
+    bar.classList.remove('hidden');
+    bar.innerHTML =
+      '<span>对比结果：</span>' +
+      '<span class="stat-item"><span class="stat-dot added"></span> +' + added + ' 新增</span>' +
+      '<span class="stat-item"><span class="stat-dot removed"></span> -' + removed + ' 删除</span>' +
+      '<span class="stat-item"><span class="stat-dot unchanged"></span> =' + unchanged + ' 未变</span>';
+  }
+
+  /* ====== 同步滚动 ====== */
+  function syncScroll() {
+    const leftRC = document.getElementById('resultLeft');
+    const rightRC = document.getElementById('resultRight');
+    let syncing = false;
+    function sync(source, target) {
+      if (syncing) return;
+      syncing = true;
+      target.scrollTop = source.scrollTop;
+      target.scrollLeft = source.scrollLeft;
+      syncing = false;
+    }
+    leftRC.addEventListener('scroll', () => sync(leftRC, rightRC), { passive: true });
+    rightRC.addEventListener('scroll', () => sync(rightRC, leftRC), { passive: true });
+  }
+
+  /* ====== Toast ====== */
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._tid);
+    t._tid = setTimeout(() => t.classList.remove('show'), 1800);
+  }
+
+  /* ====== 当前模式 ====== */
+  let currentMode = 'line';
+  let lastDiffResult = null; // 缓存上一次对比结果（供复制用）
+
+  /* ====== 主流程 ====== */
+  function runDiff() {
+    const oldText = document.getElementById('original').value;
+    const newText = document.getElementById('modified').value;
+
+    if (!oldText.trim() && !newText.trim()) {
+      showToast('请至少在一侧输入文本');
+      return;
+    }
+
+    let stats;
+    if (currentMode === 'line') {
+      const oldLines = oldText.split('\n');
+      const newLines = newText.split('\n');
+      const diff = lineLCS(oldLines, newLines);
+      stats = renderLineDiff(diff);
+      lastDiffResult = { mode: 'line', diff: diff };
+    } else {
+      const pairs = computeCharDiff(oldText, newText);
+      stats = renderCharDiff(pairs);
+      lastDiffResult = { mode: 'char', pairs: pairs };
+    }
+
+    updateStats(stats.addedCount, stats.removedCount, stats.unchangedCount);
+    document.getElementById('btnCopy').style.display = 'inline-flex';
+    document.getElementById('resultPanels').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function clearAll() {
+    document.getElementById('original').value = '';
+    document.getElementById('modified').value = '';
+    document.getElementById('resultLeft').innerHTML = '<div class="empty-state"><span class="icon">↔</span>点击「开始对比」查看差异</div>';
+    document.getElementById('resultRight').innerHTML = '<div class="empty-state"><span class="icon">↔</span>点击「开始对比」查看差异</div>';
+    document.getElementById('statsBar').classList.add('hidden');
+    document.getElementById('btnCopy').style.display = 'none';
+    document.getElementById('fileNameLeft').textContent = '';
+    document.getElementById('fileNameRight').textContent = '';
+    lastDiffResult = null;
+  }
+
+  function swapSides() {
+    const o = document.getElementById('original');
+    const m = document.getElementById('modified');
+    const tmp = o.value;
+    o.value = m.value;
+    m.value = tmp;
+    showToast('已交换左右内容');
+  }
+
+  function copyResult() {
+    if (!lastDiffResult) { showToast('请先执行对比'); return; }
+
+    let text = '=== 文本对比结果 ===\n\n';
+
+    if (lastDiffResult.mode === 'line') {
+      text += '模式：按行对比\n标记: [+] 新增行  [-] 删除行  [ ] 未修改\n\n';
+      for (const item of lastDiffResult.diff) {
+        if (item.type === 'unchanged') text += '    ' + item.oldLine + '\n';
+        else if (item.type === 'removed') text += '[-] ' + item.oldLine + '\n';
+        else if (item.type === 'added') text += '[+] ' + item.newLine + '\n';
+      }
+    } else {
+      text += '模式：按字对比\n标记: {+新增+} {-删除-}\n\n';
+      const pairs = lastDiffResult.pairs;
+      const maxLen = Math.max(
+        ...pairs.map(p => {
+          const ls = p.left.reduce((s, seg) => s + seg.text.length, 0);
+          const rs = p.right.reduce((s, seg) => s + seg.text.length, 0);
+          return Math.max(ls, rs);
+        }),
+        0
+      );
+
+      for (const pair of pairs) {
+        let leftStr = '';
+        let rightStr = '';
+        for (const seg of pair.left) {
+          if (seg.type === 'equal') leftStr += seg.text;
+          else if (seg.type === 'deleted') leftStr += '{-' + seg.text + '-}';
+        }
+        for (const seg of pair.right) {
+          if (seg.type === 'equal') rightStr += seg.text;
+          else if (seg.type === 'added') rightStr += '{+' + seg.text + '+}';
+        }
+        if (leftStr || rightStr) {
+          text += (leftStr || '(空)') + '  |  ' + (rightStr || '(空)') + '\n';
+        }
+      }
+    }
+
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('已复制对比结果');
+    }).catch(() => {
+      showToast('复制失败，请手动复制');
+    });
+  }
+
+  /* ====== 模式切换 ====== */
+  function setMode(mode) {
+    currentMode = mode;
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+    // 如果已有输入内容，自动重新对比
+    const oldText = document.getElementById('original').value;
+    const newText = document.getElementById('modified').value;
+    if ((oldText.trim() || newText.trim()) && lastDiffResult) {
+      runDiff();
+    }
+  }
+
+  /* ====== 文件读取（支持 .docx / .xlsx / 纯文本） ====== */
+  function readFileContent(file, callback, errorCallback) {
+    const name = file.name.toLowerCase();
+
+    // .docx → Mammoth.js
+    if (name.endsWith('.docx')) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof mammoth === 'undefined') { errorCallback('Mammoth.js 未加载，请检查网络'); return; }
+        mammoth.extractRawText({ arrayBuffer: reader.result })
+          .then(result => callback(result.value))
+          .catch(() => errorCallback('.docx 解析失败'));
+      };
+      reader.onerror = () => errorCallback('读取文件失败');
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
+    // .xlsx / .xls → SheetJS
+    if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof XLSX === 'undefined') { errorCallback('SheetJS 未加载，请检查网络'); return; }
+        try {
+          const wb = XLSX.read(reader.result, { type: 'array' });
+          const texts = [];
+          wb.SheetNames.forEach(sheetName => {
+            const ws = wb.Sheets[sheetName];
+            const csv = XLSX.utils.sheet_to_csv(ws, { blankrows: false });
+            if (csv.trim()) {
+              texts.push('=== ' + sheetName + ' ===\n' + csv);
+            }
+          });
+          callback(texts.join('\n\n'));
+        } catch (e) {
+          errorCallback('Excel 解析失败');
+        }
+      };
+      reader.onerror = () => errorCallback('读取文件失败');
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
+    // 纯文本文件
+    const reader = new FileReader();
+    reader.onload = () => callback(reader.result);
+    reader.onerror = () => errorCallback('读取文件失败');
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  /* ====== 文件上传 ====== */
+  function setupFileUpload(btnId, inputId, fileNameId, textareaId) {
+    const btn = document.getElementById(btnId);
+    const fileInput = document.getElementById(inputId);
+    const fileNameEl = document.getElementById(fileNameId);
+    const textarea = document.getElementById(textareaId);
+
+    function loadFile(file) {
+      if (!file) return;
+      fileNameEl.textContent = file.name;
+      readFileContent(file,
+        text => {
+          textarea.value = text;
+          showToast('已加载：' + file.name);
+        },
+        msg => showToast(msg)
+      );
+    }
+
+    // 按钮触发文件选择
+    btn.addEventListener('click', () => fileInput.click());
+
+    // 文件选择后读取
+    fileInput.addEventListener('change', () => loadFile(fileInput.files[0]));
+
+    // 拖拽上传
+    textarea.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      textarea.classList.add('drag-over');
+    });
+    textarea.addEventListener('dragleave', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      textarea.classList.remove('drag-over');
+    });
+    textarea.addEventListener('drop', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      textarea.classList.remove('drag-over');
+      loadFile(e.dataTransfer.files[0]);
+    });
+  }
+
+  /* ====== 事件绑定 ====== */
+  document.getElementById('btnDiff').addEventListener('click', runDiff);
+  document.getElementById('btnClear').addEventListener('click', clearAll);
+  document.getElementById('btnSwap').addEventListener('click', swapSides);
+  document.getElementById('btnCopy').addEventListener('click', copyResult);
+
+  setupFileUpload('btnUploadLeft', 'fileInputLeft', 'fileNameLeft', 'original');
+  setupFileUpload('btnUploadRight', 'fileInputRight', 'fileNameRight', 'modified');
+
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      setMode(this.dataset.mode);
+    });
+  });
+
+  // Ctrl+Enter 快捷键触发对比
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      runDiff();
+    }
+  });
+
+  /* ====== 初始化 ====== */
+  syncScroll();
+
+})();
+</script>
+</body>
+</html>
