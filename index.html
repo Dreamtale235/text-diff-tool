@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="在浏览器本地比较两段文本或提取 DOCX、Excel 中的文字内容，高亮显示新增、删除和修改。">
 <title>文本对比工具 - Diff Checker</title>
+<link rel="icon" href="data:,">
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
@@ -80,6 +82,12 @@ body {
 .input-panel textarea:focus {
   outline: none;
   border-color: #4dabf7;
+}
+.privacy-note {
+  margin: -4px 0 16px;
+  color: #777;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 /* 按钮行 */
@@ -325,6 +333,7 @@ textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
   .header h1 { color: #e0e0e0; }
   .header p { color: #999; }
   .input-panel label { color: #bbb; }
+  .privacy-note { color: #999; }
   .input-panel textarea {
     background: #16213e;
     border-color: #333;
@@ -387,6 +396,10 @@ textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
     </div>
   </div>
 
+  <div class="privacy-note">
+    所有对比均在本机浏览器中完成；DOCX / Excel 解析库首次加载需要联网。文件仅提取文字或单元格内容，不比较格式与版式。
+  </div>
+
   <!-- 按钮 -->
   <div class="btn-row">
     <button class="btn btn-primary" id="btnDiff">开始对比</button>
@@ -438,6 +451,10 @@ textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
   function esc(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function splitTextLines(text) {
+    return text === '' ? [] : text.split('\n');
   }
 
   /* ====== LCS 算法（逐行） ====== */
@@ -536,55 +553,129 @@ textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
     return [...prefixOps, ...coreResult, ...suffixOps];
   }
 
-  /* ====== 字符级 diff → 对齐的行对 ====== */
-  // 返回 [{left: {segments}, right: {segments}}, ...]，segment 含 type 和 text
-  function charOpsToLinePairs(charOps) {
-    const pairs = [];
-    let curLeft = [];
-    let curRight = [];
-
-    function emit() {
-      // 合并同类型相邻段
-      function merge(segs) {
-        const out = [];
-        for (const s of segs) {
-          if (out.length > 0 && out[out.length - 1].type === s.type) {
-            out[out.length - 1].text += s.text;
-          } else {
-            out.push({ type: s.type, text: s.text });
-          }
-        }
-        return out;
+  /* ====== 字符级 diff 辅助：行内比较，保持原始换行边界 ====== */
+  function mergeSegments(segments) {
+    const merged = [];
+    for (const segment of segments) {
+      if (merged.length > 0 && merged[merged.length - 1].type === segment.type) {
+        merged[merged.length - 1].text += segment.text;
+      } else {
+        merged.push({ type: segment.type, text: segment.text });
       }
-      pairs.push({ left: merge(curLeft), right: merge(curRight) });
-      curLeft = [];
-      curRight = [];
+    }
+    return merged;
+  }
+
+  function buildLinePair(oldLine, newLine) {
+    const leftExists = oldLine !== null;
+    const rightExists = newLine !== null;
+
+    if (!leftExists) {
+      return {
+        left: [],
+        right: [{ type: 'added', text: newLine }],
+        leftExists,
+        rightExists
+      };
+    }
+    if (!rightExists) {
+      return {
+        left: [{ type: 'deleted', text: oldLine }],
+        right: [],
+        leftExists,
+        rightExists
+      };
+    }
+    if (oldLine === newLine) {
+      return {
+        left: [{ type: 'equal', text: oldLine }],
+        right: [{ type: 'equal', text: newLine }],
+        leftExists,
+        rightExists
+      };
     }
 
+    const charOps = charLCS(oldLine, newLine);
+    if (!charOps) {
+      return {
+        left: [{ type: 'deleted', text: oldLine }],
+        right: [{ type: 'added', text: newLine }],
+        leftExists,
+        rightExists
+      };
+    }
+
+    const left = [];
+    const right = [];
     for (const op of charOps) {
       if (op.type === 'equal') {
-        if (op.char === '\n') {
-          emit();
-        } else {
-          curLeft.push({ type: 'equal', text: op.char });
-          curRight.push({ type: 'equal', text: op.char });
-        }
+        left.push({ type: 'equal', text: op.char });
+        right.push({ type: 'equal', text: op.char });
       } else if (op.type === 'delete') {
-        if (op.char === '\n') {
-          emit();
-        } else {
-          curLeft.push({ type: 'deleted', text: op.char });
-        }
-      } else { // insert
-        if (op.char === '\n') {
-          emit();
-        } else {
-          curRight.push({ type: 'added', text: op.char });
-        }
+        left.push({ type: 'deleted', text: op.char });
+      } else {
+        right.push({ type: 'added', text: op.char });
       }
     }
-    if (curLeft.length > 0 || curRight.length > 0) emit();
+    return {
+      left: mergeSegments(left),
+      right: mergeSegments(right),
+      leftExists,
+      rightExists
+    };
+  }
 
+  // 用轻量相似度处理连续变化块中的单行插入/删除，避免后续修改行整体错位。
+  function quickLineSimilarity(s1, s2) {
+    if (s1 === s2) return 1;
+    const chars1 = [...s1];
+    const chars2 = [...s2];
+    const maxLen = Math.max(chars1.length, chars2.length);
+    if (maxLen === 0) return 1;
+
+    let pre = 0;
+    while (pre < chars1.length && pre < chars2.length && chars1[pre] === chars2[pre]) pre++;
+    let suf = 0;
+    const remaining = Math.min(chars1.length, chars2.length) - pre;
+    while (suf < remaining && chars1[chars1.length - 1 - suf] === chars2[chars2.length - 1 - suf]) suf++;
+
+    const edgeScore = (pre + suf) / maxLen;
+    const lengthScore = Math.min(chars1.length, chars2.length) / maxLen;
+    return edgeScore * 0.85 + lengthScore * 0.15;
+  }
+
+  function alignChangedLines(oldLines, newLines) {
+    const pairs = [];
+    let i = 0;
+    let j = 0;
+    const shiftMargin = 0.25;
+
+    while (i < oldLines.length || j < newLines.length) {
+      if (i >= oldLines.length) {
+        pairs.push(buildLinePair(null, newLines[j++]));
+        continue;
+      }
+      if (j >= newLines.length) {
+        pairs.push(buildLinePair(oldLines[i++], null));
+        continue;
+      }
+
+      const current = quickLineSimilarity(oldLines[i], newLines[j]);
+      const skipNew = j + 1 < newLines.length
+        ? quickLineSimilarity(oldLines[i], newLines[j + 1])
+        : -1;
+      const skipOld = i + 1 < oldLines.length
+        ? quickLineSimilarity(oldLines[i + 1], newLines[j])
+        : -1;
+
+      if (skipNew > current + shiftMargin && skipNew >= skipOld) {
+        pairs.push(buildLinePair(null, newLines[j++]));
+      } else if (skipOld > current + shiftMargin) {
+        pairs.push(buildLinePair(oldLines[i++], null));
+      } else {
+        pairs.push(buildLinePair(oldLines[i++], newLines[j++]));
+      }
+    }
     return pairs;
   }
 
@@ -668,20 +759,10 @@ textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
     return { addedCount, removedCount, unchangedCount };
   }
 
-  /* ====== 按字模式：混合算法 ====== */
-  // 正文过短（<=2 行）或全文 <=6000 字符时，做全文逐字 LCS
-  // 否则，做逐行 LCS，再对每个「变化块」做块内逐字 LCS
+  /* ====== 按字模式：先按行对齐，再做行内逐字比较 ====== */
   function computeCharDiff(oldText, newText) {
-    const oldLines = oldText.split('\n');
-    const newLines = newText.split('\n');
-
-    // 全文逐字 LCS
-    const fullCharOps = charLCS(oldText, newText);
-    if (fullCharOps) {
-      return charOpsToLinePairs(fullCharOps);
-    }
-
-    // 降级：逐行 LCS → 变化块内逐字
+    const oldLines = splitTextLines(oldText);
+    const newLines = splitTextLines(newText);
     const lineOps = lineLCS(oldLines, newLines);
 
     // 收集变化块
@@ -704,56 +785,14 @@ textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
 
     // 构建行对
     const pairs = [];
-    let leftLineIdx = 0;
-    let rightLineIdx = 0;
-
     for (const block of blocks) {
       if (block.type === 'unchanged') {
-        pairs.push({
-          left: [{ type: 'equal', text: block.oldLine }],
-          right: [{ type: 'equal', text: block.newLine }]
-        });
-        leftLineIdx++; rightLineIdx++;
+        pairs.push(buildLinePair(block.oldLine, block.newLine));
       } else {
-        // 变化块：拼接所有行，做逐字 LCS
-        const oldBlock = block.oldLines.join('\n');
-        const newBlock = block.newLines.join('\n');
-        const blockCharOps = charLCS(oldBlock, newBlock);
-
-        if (blockCharOps) {
-          const blockPairs = charOpsToLinePairs(blockCharOps);
-          for (const p of blockPairs) pairs.push(p);
-        } else {
-          // 块内逐字也太大，退回整行高亮
-          for (const ol of block.oldLines) {
-            pairs.push({
-              left: [{ type: 'deleted', text: ol }],
-              right: []
-            });
-          }
-          for (const nl of block.newLines) {
-            pairs.push({
-              left: [],
-              right: [{ type: 'added', text: nl }]
-            });
-          }
-        }
+        pairs.push(...alignChangedLines(block.oldLines, block.newLines));
       }
     }
-
-    // 重新对齐：确保左右行数一致
-    return realignPairs(pairs);
-  }
-
-  function realignPairs(pairs) {
-    // 保证每个 pair 都有 left 和 right，缺失的补占位
-    const result = [];
-    for (const p of pairs) {
-      const lp = p.left && p.left.length > 0 ? p.left : [];
-      const rp = p.right && p.right.length > 0 ? p.right : [];
-      result.push({ left: lp, right: rp });
-    }
-    return result;
+    return pairs;
   }
 
   /* ====== 按字模式：渲染 ====== */
@@ -770,11 +809,8 @@ textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
     let unchangedCount = 0;
 
     for (const pair of pairs) {
-      const hasLeft = pair.left.some(s => s.type === 'equal' || s.type === 'deleted');
-      const hasRight = pair.right.some(s => s.type === 'equal' || s.type === 'added');
-
-      const leftOnlyDel = pair.left.length > 0 && pair.left.every(s => s.type === 'deleted');
-      const rightOnlyAdd = pair.right.length > 0 && pair.right.every(s => s.type === 'added');
+      const hasLeft = pair.leftExists;
+      const hasRight = pair.rightExists;
       const bothEq = pair.left.length > 0 && pair.right.length > 0 &&
         pair.left.every(s => s.type === 'equal') &&
         pair.right.every(s => s.type === 'equal');
@@ -783,17 +819,13 @@ textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
       if (hasRight) rightNum++;
 
       // 统计
-      if (leftOnlyDel && !hasRight) removedCount++;
-      else if (rightOnlyAdd && !hasLeft) addedCount++;
+      if (hasLeft && !hasRight) removedCount++;
+      else if (hasRight && !hasLeft) addedCount++;
       else if (bothEq) unchangedCount++;
       else {
-        // 混合行：按字符统计
-        const totalChars = pair.left.reduce((s, seg) => s + seg.text.length, 0) +
-          pair.right.reduce((s, seg) => s + seg.text.length, 0);
-        if (totalChars === 0) unchangedCount++;
-        else if (leftOnlyDel) removedCount++;
-        else if (rightOnlyAdd) addedCount++;
-        else unchangedCount++;
+        // 修改行同时计为一行删除和一行新增，与按行模式的口径一致。
+        removedCount++;
+        addedCount++;
       }
 
       leftHTML += buildCharLineHTML(pair.left, 'left', hasLeft ? leftNum : '');
@@ -863,8 +895,8 @@ textarea.drag-over { border-color: #4dabf7; background: #f0f7ff; }
 
     let stats;
     if (currentMode === 'line') {
-      const oldLines = oldText.split('\n');
-      const newLines = newText.split('\n');
+      const oldLines = splitTextLines(oldText);
+      const newLines = splitTextLines(newText);
       const diff = lineLCS(oldLines, newLines);
       stats = renderLineDiff(diff);
       lastDiffResult = { mode: 'line', diff: diff };
